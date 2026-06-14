@@ -41,6 +41,7 @@ public class AsyncNativeCameraOps implements Closeable {
     private final NativeCameraSessionBridge mCameraSessionBridge;
     private final Handler mMainHandler;
     private Size mUnscaledSize;
+    private volatile boolean mClosed = false;
 
     public interface PreviewListener {
         void onPreviewAvailable(NativeCameraBuffer buffer, Bitmap image);
@@ -63,33 +64,72 @@ public class AsyncNativeCameraOps implements Closeable {
         mMainHandler = new Handler(Looper.getMainLooper());
     }
 
-    @Override
-    public void close() {
-        mBackgroundProcessor.shutdown();
+    private void shutdownExecutor(ExecutorService executor) {
+        executor.shutdownNow();
 
         try {
-            if(!mBackgroundProcessor.awaitTermination(500, TimeUnit.MILLISECONDS)) {
-                mBackgroundProcessor.shutdownNow();
+            if (!executor.awaitTermination(500, TimeUnit.MILLISECONDS)) {
+                executor.shutdownNow();
             }
         }
         catch (InterruptedException e) {
-            e.printStackTrace();
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
         }
     }
 
+    @Override
+    public void close() {
+        mClosed = true;
+
+        shutdownExecutor(mBackgroundProcessor);
+        shutdownExecutor(mQueuedBackgroundProcessor);
+
+        mMainHandler.removeCallbacksAndMessages(null);
+    }
+
+    public boolean isClosed() {
+        return mClosed;
+    }
+
     public void captureImage(long bufferHandle, int numSaveImages, PostProcessSettings settings, String outputPath, CaptureImageListener listener) {
+        if (mClosed)
+            return;
+
         mBackgroundProcessor.submit(() -> {
+            if (mClosed)
+                return;
+
             mCameraSessionBridge.captureImage(bufferHandle, numSaveImages, settings, outputPath);
-            mMainHandler.post(() -> listener.onCaptured(bufferHandle));
+
+            if (mClosed)
+                return;
+
+            mMainHandler.post(() -> {
+                if (!mClosed)
+                    listener.onCaptured(bufferHandle);
+            });
         });
     }
 
     public void estimateSettings(boolean basicSettings, float shadowsBias, PostProcessSettingsListener listener) {
+        if (mClosed)
+            return;
+
         mBackgroundProcessor.submit(() -> {
+            if (mClosed)
+                return;
+
             try {
                 PostProcessSettings result = mCameraSessionBridge.estimatePostProcessSettings(basicSettings, shadowsBias);
-                mMainHandler.post(() -> listener.onSettingsEstimated(result));
 
+                if (mClosed)
+                    return;
+
+                mMainHandler.post(() -> {
+                    if (!mClosed)
+                        listener.onSettingsEstimated(result);
+                });
             }
             catch (IOException e) {
                 e.printStackTrace();
@@ -98,20 +138,35 @@ public class AsyncNativeCameraOps implements Closeable {
     }
 
     public void measureSharpness(List<NativeCameraBuffer> buffers, SharpnessMeasuredListener listener) {
+        if (mClosed)
+            return;
+
         if(buffers.isEmpty())
             return;
 
         mBackgroundProcessor.submit(() -> {
+            if (mClosed)
+                return;
+
             List<Pair<NativeCameraBuffer, Double>> result = new ArrayList<>();
 
             for(NativeCameraBuffer buffer : buffers) {
+                if (mClosed)
+                    return;
+
                 double sharpness = mCameraSessionBridge.measureSharpness(buffer.timestamp);
                 result.add(new Pair<>(buffer, sharpness));
             }
 
             result.sort((l, r) -> l.second.compareTo(r.second));
 
-            mMainHandler.post(() -> listener.onSharpnessMeasured(result));
+            if (mClosed)
+                return;
+
+            mMainHandler.post(() -> {
+                if (!mClosed)
+                    listener.onSharpnessMeasured(result);
+            });
         });
     }
 
@@ -145,10 +200,16 @@ public class AsyncNativeCameraOps implements Closeable {
                                 PreviewListener listener,
                                 boolean canSkip)
     {
+        if (mClosed)
+            return;
+
         PostProcessSettings postProcessSettings = settings.clone();
 
         ExecutorService p = canSkip ? mBackgroundProcessor : mQueuedBackgroundProcessor;
         p.submit(() -> {
+            if (mClosed)
+                return;
+
             Bitmap preview = useBitmap;
             Size size = getPreviewSize(generateSize, buffer);
 
@@ -166,10 +227,16 @@ public class AsyncNativeCameraOps implements Closeable {
                     generateSize.scale,
                     preview);
 
+            if (mClosed)
+                return;
+
             final Bitmap resultBitmap = preview;
 
             // On the main thread, let listeners know that an image is ready
-            mMainHandler.post(() -> listener.onPreviewAvailable(buffer, resultBitmap));
+            mMainHandler.post(() -> {
+                if (!mClosed)
+                    listener.onPreviewAvailable(buffer, resultBitmap);
+            });
         });
     }
 }

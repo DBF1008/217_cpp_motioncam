@@ -453,11 +453,13 @@ public class PostProcessFragment extends Fragment implements
 
     @Override
     public void onCaptured(long handle) {
+        if (!isAdded() || getView() == null)
+            return;
+
         Log.i(TAG, "Image captured!");
 
         // Restore save button
-        Objects.requireNonNull(getView())
-                .findViewById(R.id.saveBtn).setEnabled(true);
+        getView().findViewById(R.id.saveBtn).setEnabled(true);
 
         // Start service to process the image
         Intent intent = new Intent(getActivity(), ProcessorService.class);
@@ -471,27 +473,27 @@ public class PostProcessFragment extends Fragment implements
     @Override
     public void onProcessingStarted() {
         View v = getView();
-        if(v != null) {
-            v.findViewById(R.id.saveProgressBar).setVisibility(View.VISIBLE);
-            ((ProgressBar) v.findViewById(R.id.saveProgressBar)).setProgress(0);
-        }
+        if(v == null)
+            return;
+        v.findViewById(R.id.saveProgressBar).setVisibility(View.VISIBLE);
+        ((ProgressBar) v.findViewById(R.id.saveProgressBar)).setProgress(0);
     }
 
     @Override
     public void onProcessingProgress(int progress) {
         View v = getView();
-        if(v != null) {
-            v.findViewById(R.id.saveProgressBar).setVisibility(View.VISIBLE);
-            ((ProgressBar) v.findViewById(R.id.saveProgressBar)).setProgress(progress);
-        }
+        if(v == null)
+            return;
+        v.findViewById(R.id.saveProgressBar).setVisibility(View.VISIBLE);
+        ((ProgressBar) v.findViewById(R.id.saveProgressBar)).setProgress(progress);
     }
 
     @Override
     public void onProcessingCompleted(File internalPath, Uri contentUri) {
         View v = getView();
-        if(v != null) {
-            v.findViewById(R.id.saveProgressBar).setVisibility(View.INVISIBLE);
-        }
+        if(v == null)
+            return;
+        v.findViewById(R.id.saveProgressBar).setVisibility(View.INVISIBLE);
     }
 
     @Override
@@ -500,6 +502,9 @@ public class PostProcessFragment extends Fragment implements
 
     @Override
     public void onSharpnessMeasured(List<Pair<NativeCameraBuffer, Double>> sharpnessList) {
+        if (!isAdded() || getView() == null)
+            return;
+
         if(sharpnessList.isEmpty())
             return;
 
