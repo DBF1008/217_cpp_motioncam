@@ -1753,6 +1753,12 @@ public class CameraActivity extends AppCompatActivity implements
     }
 
     @Override
+    public void onProcessingFailed(String errorMessage) {
+        Log.e(TAG, "Processing failed: " + errorMessage);
+        mBinding.previewProcessingFrame.setVisibility(View.INVISIBLE);
+    }
+
+    @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if(keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
             onCaptureClicked();

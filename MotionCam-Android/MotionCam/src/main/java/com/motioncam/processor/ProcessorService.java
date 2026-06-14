@@ -103,8 +103,22 @@ public class ProcessorService extends IntentService {
                     boolean processInMemory,
                     ResultReceiver receiver)
         {
+            this(context, rawContainerPath, previewDirectory, processInMemory, receiver, new NativeProcessor());
+        }
+
+        /**
+         * Package-private constructor for testing — allows injecting a mock NativeProcessor
+         * so we don't need to load the native library.
+         */
+        ProcessFile(Context context,
+                    File rawContainerPath,
+                    File previewDirectory,
+                    boolean processInMemory,
+                    ResultReceiver receiver,
+                    NativeProcessor nativeProcessor)
+        {
             mContext = context;
-            mNativeProcessor = new NativeProcessor();
+            mNativeProcessor = nativeProcessor;
             mReceiver = receiver;
             mRawContainerPath = rawContainerPath;
             mProcessInMemory = processInMemory;
@@ -119,91 +133,129 @@ public class ProcessorService extends IntentService {
 
         @Override
         public Boolean call() throws IOException {
-            if(mProcessInMemory) {
-                if (!mNativeProcessor.processInMemory(mTempFileJpeg.getPath(), this)) {
-                    Log.d(TAG, "No in-memory container found");
-                    return false;
-                }
-            }
-            else {
-                mNativeProcessor.processFile(mRawContainerPath.getPath(), mTempFileJpeg.getPath(), this);
-            }
-
+            // Notify receiver that processing is starting
             if(mReceiver != null) {
                 Bundle bundle = new Bundle();
 
                 bundle.putInt(ProcessorReceiver.PROCESS_CODE_PROGRESS_VALUE_KEY, 0);
                 bundle.putString(ProcessorReceiver.PROCESS_CODE_OUTPUT_FILE_PATH_KEY, mRawContainerPath.getPath());
 
-                mReceiver.send(ProcessorReceiver.PROCESS_CODE_STARTED, Bundle.EMPTY);
+                mReceiver.send(ProcessorReceiver.PROCESS_CODE_STARTED, bundle);
             }
 
-            Uri contentUri = null;
-
-            // Copy to media store
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                if(BuildConfig.DEBUG && !mProcessInMemory)
-                    saveToFiles(mRawContainerPath, "application/zip", Environment.DIRECTORY_DOCUMENTS);
-
-                if (mTempFileDng.exists()) {
-                    saveToMediaStore(mTempFileDng, "image/x-adobe-dng", Environment.DIRECTORY_DCIM + File.separator + "Camera");
-                    mTempFileDng.delete();
+            try {
+                if(mProcessInMemory) {
+                    if (!mNativeProcessor.processInMemory(mTempFileJpeg.getPath(), this)) {
+                        Log.d(TAG, "No in-memory container found");
+                        sendFailed("No in-memory container found");
+                        return false;
+                    }
+                }
+                else {
+                    mNativeProcessor.processFile(mRawContainerPath.getPath(), mTempFileJpeg.getPath(), this);
                 }
 
-                if (mTempFileJpeg.exists()) {
-                    contentUri = saveToMediaStore(mTempFileJpeg, "image/jpeg", Environment.DIRECTORY_DCIM + File.separator + "Camera");
-                }
-            }
-            // Legacy copy file
-            else {
-                // Set up the output path to point to the camera DCIM folder
-                File dcimDirectory = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM);
-                File outputDirectory = new File(dcimDirectory, "Camera");
+                Uri contentUri = null;
 
-                if(!outputDirectory.exists()) {
-                    if(!outputDirectory.mkdirs()) {
-                        Log.e(TAG, "Failed to create " + outputDirectory);
-                        throw new IOException("Failed to create output directory");
+                // Copy to media store
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    if(BuildConfig.DEBUG && !mProcessInMemory)
+                        saveToFiles(mRawContainerPath, "application/zip", Environment.DIRECTORY_DOCUMENTS);
+
+                    if (mTempFileDng.exists()) {
+                        saveToMediaStore(mTempFileDng, "image/x-adobe-dng", Environment.DIRECTORY_DCIM + File.separator + "Camera");
+                        mTempFileDng.delete();
+                    }
+
+                    if (mTempFileJpeg.exists()) {
+                        contentUri = saveToMediaStore(mTempFileJpeg, "image/jpeg", Environment.DIRECTORY_DCIM + File.separator + "Camera");
+                    }
+                }
+                // Legacy copy file
+                else {
+                    // Set up the output path to point to the camera DCIM folder
+                    File dcimDirectory = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM);
+                    File outputDirectory = new File(dcimDirectory, "Camera");
+
+                    if(!outputDirectory.exists()) {
+                        if(!outputDirectory.mkdirs()) {
+                            Log.e(TAG, "Failed to create " + outputDirectory);
+                            throw new IOException("Failed to create output directory");
+                        }
+                    }
+
+                    if(mTempFileDng.exists()) {
+                        File outputFileDng = new File(outputDirectory, mOutputFileNameDng);
+
+                        Log.d(TAG, "Writing to " + outputFileDng.getPath());
+
+                        FileUtils.copyFile(mTempFileDng, outputFileDng);
+                        mTempFileDng.delete();
+                    }
+
+                    if(mTempFileJpeg.exists()) {
+                        File outputFileJpeg = new File(outputDirectory, mOutputFileNameJpeg);
+
+                        Log.d(TAG, "Writing to " + outputFileJpeg.getPath());
+
+                        FileUtils.copyFile(mTempFileJpeg, outputFileJpeg);
+
+                        contentUri = Uri.fromFile(outputFileJpeg);
+                        mContext.sendBroadcast(new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, contentUri));
                     }
                 }
 
-                if(mTempFileDng.exists()) {
-                    File outputFileDng = new File(outputDirectory, mOutputFileNameDng);
-
-                    Log.d(TAG, "Writing to " + outputFileDng.getPath());
-
-                    FileUtils.copyFile(mTempFileDng, outputFileDng);
+                // Validate that we produced an output URI before reporting success
+                if(contentUri == null) {
+                    sendFailed("Failed to export image: no output was generated");
+                    // Clean up temp files, but preserve the raw container so the user can retry
+                    mTempFileJpeg.delete();
                     mTempFileDng.delete();
+                    mNotifyManager.cancel(NOTIFICATION_ID);
+                    return false;
                 }
 
-                if(mTempFileJpeg.exists()) {
-                    File outputFileJpeg = new File(outputDirectory, mOutputFileNameJpeg);
+                if(mReceiver != null) {
+                    Bundle bundle = new Bundle();
 
-                    Log.d(TAG, "Writing to " + outputFileJpeg.getPath());
+                    bundle.putString(ProcessorReceiver.PROCESS_CODE_CONTENT_URI_KEY, contentUri.toString());
+                    bundle.putString(ProcessorReceiver.PROCESS_CODE_OUTPUT_FILE_PATH_KEY, mTempFileJpeg.getPath());
+                    bundle.putInt(ProcessorReceiver.PROCESS_CODE_PROGRESS_VALUE_KEY, 100);
 
-                    FileUtils.copyFile(mTempFileJpeg, outputFileJpeg);
-
-                    contentUri = Uri.fromFile(outputFileJpeg);
-                    mContext.sendBroadcast(new Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, contentUri));
+                    mReceiver.send(ProcessorReceiver.PROCESS_CODE_COMPLETED, bundle);
                 }
+
+                mNotifyManager.cancel(NOTIFICATION_ID);
+
+                // Only delete the raw container after confirmed successful export
+                if(!mProcessInMemory)
+                    mRawContainerPath.delete();
+
+                return true;
             }
+            catch (Exception e) {
+                Log.e(TAG, "Failed to process " + mRawContainerPath.getPath(), e);
 
+                sendFailed("Processing failed: " + e.getMessage());
+
+                // Clean up temp files, but DO NOT delete the raw container — preserve it for retry
+                mTempFileJpeg.delete();
+                mTempFileDng.delete();
+
+                mNotifyManager.cancel(NOTIFICATION_ID);
+
+                return false;
+            }
+        }
+
+        private void sendFailed(String errorMessage) {
             if(mReceiver != null) {
                 Bundle bundle = new Bundle();
+                bundle.putString(ProcessorReceiver.PROCESS_CODE_ERROR_MESSAGE_KEY, errorMessage);
+                bundle.putString(ProcessorReceiver.PROCESS_CODE_OUTPUT_FILE_PATH_KEY, mRawContainerPath.getPath());
 
-                bundle.putString(ProcessorReceiver.PROCESS_CODE_CONTENT_URI_KEY, contentUri.toString());
-                bundle.putString(ProcessorReceiver.PROCESS_CODE_OUTPUT_FILE_PATH_KEY, mTempFileJpeg.getPath());
-                bundle.putInt(ProcessorReceiver.PROCESS_CODE_PROGRESS_VALUE_KEY, 100);
-
-                mReceiver.send(ProcessorReceiver.PROCESS_CODE_COMPLETED, bundle);
+                mReceiver.send(ProcessorReceiver.PROCESS_CODE_FAILED, bundle);
             }
-
-            mNotifyManager.cancel(NOTIFICATION_ID);
-
-            if(!mProcessInMemory)
-                mRawContainerPath.delete();
-
-            return true;
         }
 
         @RequiresApi(api = Build.VERSION_CODES.Q)
@@ -370,6 +422,7 @@ public class ProcessorService extends IntentService {
         @Override
         public void onError(String error) {
             Log.e(TAG, "Error processing image " + mOutputFileNameJpeg + " error: " + error);
+            sendFailed(error);
             mNotifyManager.cancel(NOTIFICATION_ID);
         }
     }
@@ -437,8 +490,10 @@ public class ProcessorService extends IntentService {
                 processFile.call();
             }
             catch (Exception e) {
-                Log.e(TAG, "Failed to process " + file.getPath(), e);
-                file.delete();
+                // call() handles its own error reporting and temp-file cleanup.
+                // If we land here (unexpected error), log it but NEVER delete the
+                // raw container — the user must be able to retry.
+                Log.e(TAG, "Unhandled failure processing " + file.getPath(), e);
             }
         }
     }

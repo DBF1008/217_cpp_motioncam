@@ -17,10 +17,12 @@ public class ProcessorReceiver extends ResultReceiver {
     final static int PROCESS_CODE_PROGRESS      = 1001;
     final static int PROCESS_CODE_PREVIEW_READY = 1002;
     final static int PROCESS_CODE_COMPLETED     = 1003;
+    final static int PROCESS_CODE_FAILED        = 1004;
 
     final static String PROCESS_CODE_OUTPUT_FILE_PATH_KEY = "outputFilePath";
     final static String PROCESS_CODE_CONTENT_URI_KEY = "contentUri";
     final static String PROCESS_CODE_PROGRESS_VALUE_KEY = "progressValue";
+    final static String PROCESS_CODE_ERROR_MESSAGE_KEY = "errorMessage";
 
     public ProcessorReceiver(Handler handler) {
         super(handler);
@@ -31,7 +33,7 @@ public class ProcessorReceiver extends ResultReceiver {
         void onProcessingStarted();
         void onProcessingProgress(int progress);
         void onProcessingCompleted(File internalPath, Uri contentUri);
-
+        void onProcessingFailed(String errorMessage);
     }
 
     public void setReceiver(Receiver receiver) {
@@ -69,6 +71,12 @@ public class ProcessorReceiver extends ResultReceiver {
                 String contentUri = resultData.getString(PROCESS_CODE_CONTENT_URI_KEY);
 
                 mReceiver.onProcessingCompleted(new File(outputPath), Uri.parse(contentUri));
+            }
+            break;
+
+            case PROCESS_CODE_FAILED: {
+                String errorMessage = resultData.getString(PROCESS_CODE_ERROR_MESSAGE_KEY, "Unknown error");
+                mReceiver.onProcessingFailed(errorMessage);
             }
             break;
 

@@ -495,6 +495,15 @@ public class PostProcessFragment extends Fragment implements
     }
 
     @Override
+    public void onProcessingFailed(String errorMessage) {
+        Log.e(TAG, "Processing failed: " + errorMessage);
+        View v = getView();
+        if(v != null) {
+            v.findViewById(R.id.saveProgressBar).setVisibility(View.INVISIBLE);
+        }
+    }
+
+    @Override
     public void onPreviewSaved(String outputPath) {
     }
 
