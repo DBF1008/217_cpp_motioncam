@@ -264,9 +264,8 @@ public class PostProcessViewModel extends ViewModel {
                 CameraManualControl.GetClosestShutterSpeed(shutterSpeed),
                 CameraManualControl.GetClosestIso(CameraManualControl.GetIsoValuesInRange(100, 6400), iso));
 
-        float a = 1.6f;
-        if(cameraApertures == null || cameraApertures.length == 0)
-            a = cameraApertures[0];
+        // Default aperture fallback for devices that don't report aperture metadata
+        float a = resolveAperture(cameraApertures);
 
         DenoiseSettings denoiseSettings = new DenoiseSettings(0, (float) exposure.getEv(a), settings.shadows);
         PostProcessViewModel.SpatialDenoiseAggressiveness spatialNoise = SpatialDenoiseAggressiveness.NORMAL;
@@ -317,5 +316,18 @@ public class PostProcessViewModel extends ViewModel {
 
     public PostProcessSettings getEstimatedSettings() {
         return mEstimatedSettings.getValue();
+    }
+
+    /**
+     * Resolve the camera aperture from metadata, falling back to a sensible default
+     * when the device does not report aperture information.
+     *
+     * @param cameraApertures array of aperture values from camera metadata, may be null or empty
+     * @return the first aperture value if available, otherwise the default 1.6f
+     */
+    static float resolveAperture(float[] cameraApertures) {
+        if(cameraApertures != null && cameraApertures.length > 0)
+            return cameraApertures[0];
+        return 1.6f;
     }
 }
