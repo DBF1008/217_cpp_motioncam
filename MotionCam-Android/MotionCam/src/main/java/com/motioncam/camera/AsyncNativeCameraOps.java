@@ -13,8 +13,10 @@ import java.util.List;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class AsyncNativeCameraOps implements Closeable {
     public enum PreviewSize {
@@ -29,14 +31,19 @@ public class AsyncNativeCameraOps implements Closeable {
         }
     }
 
-    private ExecutorService mQueuedBackgroundProcessor = Executors.newSingleThreadExecutor();
+    private final ExecutorService mQueuedBackgroundProcessor = Executors.newSingleThreadExecutor();
 
-    private ExecutorService mBackgroundProcessor =
+    private final ExecutorService mBackgroundProcessor =
             new ThreadPoolExecutor(
                 1, 1, 500, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(2),
                 Executors.defaultThreadFactory(),
                 new ThreadPoolExecutor.DiscardOldestPolicy());
+
+    // Once closed, no further background work is accepted and no callbacks are
+    // delivered. This protects against tasks that were already queued continuing
+    // to run after the owning fragment (and the native camera session) is gone.
+    private final AtomicBoolean mClosed = new AtomicBoolean(false);
 
     private final NativeCameraSessionBridge mCameraSessionBridge;
     private final Handler mMainHandler;
@@ -59,36 +66,95 @@ public class AsyncNativeCameraOps implements Closeable {
     }
 
     public AsyncNativeCameraOps(NativeCameraSessionBridge cameraSessionBridge) {
+        this(cameraSessionBridge, new Handler(Looper.getMainLooper()));
+    }
+
+    // Visible for testing: lets unit tests supply a Handler so the main-thread
+    // dispatch (and the close() callback-invalidation boundary) can be observed
+    // without a real Looper.
+    AsyncNativeCameraOps(NativeCameraSessionBridge cameraSessionBridge, Handler mainHandler) {
         mCameraSessionBridge = cameraSessionBridge;
-        mMainHandler = new Handler(Looper.getMainLooper());
+        mMainHandler = mainHandler;
     }
 
     @Override
     public void close() {
-        mBackgroundProcessor.shutdown();
+        // Idempotent and safe to call from the main thread (onDestroy()).
+        if(!mClosed.compareAndSet(false, true)) {
+            return;
+        }
+
+        // Shut down BOTH executors. Previously only mBackgroundProcessor was
+        // stopped, which leaked mQueuedBackgroundProcessor and let already-queued
+        // preview tasks keep calling into the native session after it had been
+        // destroyed. Awaiting termination also ensures no preview task is still
+        // executing createPreviewImage() by the time the caller destroys the
+        // native camera handle.
+        shutdownAndAwait(mQueuedBackgroundProcessor);
+        shutdownAndAwait(mBackgroundProcessor);
+    }
+
+    private static void shutdownAndAwait(ExecutorService executor) {
+        executor.shutdown();
 
         try {
-            if(!mBackgroundProcessor.awaitTermination(500, TimeUnit.MILLISECONDS)) {
-                mBackgroundProcessor.shutdownNow();
+            if(!executor.awaitTermination(500, TimeUnit.MILLISECONDS)) {
+                executor.shutdownNow();
             }
         }
         catch (InterruptedException e) {
-            e.printStackTrace();
+            executor.shutdownNow();
+            Thread.currentThread().interrupt();
         }
     }
 
+    private void submit(ExecutorService executor, Runnable task) {
+        // Don't accept new work once closed: the task would call into a destroyed
+        // native session and/or deliver a callback to a torn-down fragment.
+        if(mClosed.get()) {
+            return;
+        }
+
+        try {
+            executor.submit(() -> {
+                // close() may have happened while this task sat in the queue.
+                if(mClosed.get()) {
+                    return;
+                }
+
+                task.run();
+            });
+        }
+        catch (RejectedExecutionException e) {
+            // close() raced with this submission; dropping the task is correct.
+        }
+    }
+
+    private void postResult(Runnable callback) {
+        mMainHandler.post(() -> {
+            // The fragment and native session may have been destroyed between the
+            // background work finishing and this callback running on the main
+            // thread. Suppress the callback in that case.
+            if(mClosed.get()) {
+                return;
+            }
+
+            callback.run();
+        });
+    }
+
     public void captureImage(long bufferHandle, int numSaveImages, PostProcessSettings settings, String outputPath, CaptureImageListener listener) {
-        mBackgroundProcessor.submit(() -> {
+        submit(mBackgroundProcessor, () -> {
             mCameraSessionBridge.captureImage(bufferHandle, numSaveImages, settings, outputPath);
-            mMainHandler.post(() -> listener.onCaptured(bufferHandle));
+            postResult(() -> listener.onCaptured(bufferHandle));
         });
     }
 
     public void estimateSettings(boolean basicSettings, float shadowsBias, PostProcessSettingsListener listener) {
-        mBackgroundProcessor.submit(() -> {
+        submit(mBackgroundProcessor, () -> {
             try {
                 PostProcessSettings result = mCameraSessionBridge.estimatePostProcessSettings(basicSettings, shadowsBias);
-                mMainHandler.post(() -> listener.onSettingsEstimated(result));
+                postResult(() -> listener.onSettingsEstimated(result));
 
             }
             catch (IOException e) {
@@ -101,7 +167,7 @@ public class AsyncNativeCameraOps implements Closeable {
         if(buffers.isEmpty())
             return;
 
-        mBackgroundProcessor.submit(() -> {
+        submit(mBackgroundProcessor, () -> {
             List<Pair<NativeCameraBuffer, Double>> result = new ArrayList<>();
 
             for(NativeCameraBuffer buffer : buffers) {
@@ -111,7 +177,7 @@ public class AsyncNativeCameraOps implements Closeable {
 
             result.sort((l, r) -> l.second.compareTo(r.second));
 
-            mMainHandler.post(() -> listener.onSharpnessMeasured(result));
+            postResult(() -> listener.onSharpnessMeasured(result));
         });
     }
 
@@ -147,8 +213,8 @@ public class AsyncNativeCameraOps implements Closeable {
     {
         PostProcessSettings postProcessSettings = settings.clone();
 
-        ExecutorService p = canSkip ? mBackgroundProcessor : mQueuedBackgroundProcessor;
-        p.submit(() -> {
+        ExecutorService executor = canSkip ? mBackgroundProcessor : mQueuedBackgroundProcessor;
+        submit(executor, () -> {
             Bitmap preview = useBitmap;
             Size size = getPreviewSize(generateSize, buffer);
 
@@ -169,7 +235,7 @@ public class AsyncNativeCameraOps implements Closeable {
             final Bitmap resultBitmap = preview;
 
             // On the main thread, let listeners know that an image is ready
-            mMainHandler.post(() -> listener.onPreviewAvailable(buffer, resultBitmap));
+            postResult(() -> listener.onPreviewAvailable(buffer, resultBitmap));
         });
     }
 }
