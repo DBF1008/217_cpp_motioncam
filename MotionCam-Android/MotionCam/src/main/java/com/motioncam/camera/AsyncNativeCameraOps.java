@@ -43,7 +43,7 @@ public class AsyncNativeCameraOps implements Closeable {
     private Size mUnscaledSize;
 
     public interface PreviewListener {
-        void onPreviewAvailable(NativeCameraBuffer buffer, Bitmap image);
+        void onPreviewAvailable(NativeCameraBuffer buffer, Bitmap image, long requestId);
     }
 
     public interface PostProcessSettingsListener {
@@ -138,12 +138,21 @@ public class AsyncNativeCameraOps implements Closeable {
         return new Size(width, height);
     }
 
+    /**
+     * Generate a preview for the given buffer asynchronously.
+     *
+     * @param requestId opaque id identifying this request; it is passed back unchanged to
+     *                  {@link PreviewListener#onPreviewAvailable} so the caller can discard
+     *                  results from requests that have since been superseded. See
+     *                  {@link PreviewRequestTracker}.
+     */
     public void generatePreview(NativeCameraBuffer buffer,
                                 PostProcessSettings settings,
                                 PreviewSize generateSize,
                                 Bitmap useBitmap,
                                 PreviewListener listener,
-                                boolean canSkip)
+                                boolean canSkip,
+                                long requestId)
     {
         PostProcessSettings postProcessSettings = settings.clone();
 
@@ -169,7 +178,7 @@ public class AsyncNativeCameraOps implements Closeable {
             final Bitmap resultBitmap = preview;
 
             // On the main thread, let listeners know that an image is ready
-            mMainHandler.post(() -> listener.onPreviewAvailable(buffer, resultBitmap));
+            mMainHandler.post(() -> listener.onPreviewAvailable(buffer, resultBitmap, requestId));
         });
     }
 }

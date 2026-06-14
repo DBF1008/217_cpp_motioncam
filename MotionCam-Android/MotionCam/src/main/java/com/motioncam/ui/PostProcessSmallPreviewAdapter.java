@@ -19,6 +19,7 @@ import com.motioncam.R;
 import com.motioncam.camera.AsyncNativeCameraOps;
 import com.motioncam.camera.NativeCameraBuffer;
 import com.motioncam.camera.PostProcessSettings;
+import com.motioncam.camera.PreviewRequestTracker;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -73,6 +74,7 @@ public class PostProcessSmallPreviewAdapter extends RecyclerView.Adapter<PostPro
     private List<Item> mItems;
     private int mSelectedIndex;
     private OnSelectionChangedListner mSelectionListener;
+    private final PreviewRequestTracker mRequestTracker = new PreviewRequestTracker();
 
     PostProcessSmallPreviewAdapter(Context context,
                                    AsyncNativeCameraOps asyncNativeCameraOps,
@@ -104,8 +106,10 @@ public class PostProcessSmallPreviewAdapter extends RecyclerView.Adapter<PostPro
     @Override
     public void onBindViewHolder(@NonNull PostProcessSmallPreviewAdapter.ViewHolder viewHolder, int index) {
         if(mItems.get(index).preview == null) {
+            long requestId = mRequestTracker.newRequest(mItems.get(index).buffer.timestamp);
+
             mAsyncNativeCameraOps.generatePreview(
-                    mItems.get(index).buffer, mPostProcessSettings, AsyncNativeCameraOps.PreviewSize.SMALL, null, this, false);
+                    mItems.get(index).buffer, mPostProcessSettings, AsyncNativeCameraOps.PreviewSize.SMALL, null, this, false, requestId);
 
             viewHolder.mImageView.setImageBitmap(null);
         }
@@ -165,7 +169,12 @@ public class PostProcessSmallPreviewAdapter extends RecyclerView.Adapter<PostPro
     }
 
     @Override
-    public void onPreviewAvailable(NativeCameraBuffer buffer, Bitmap image) {
+    public void onPreviewAvailable(NativeCameraBuffer buffer, Bitmap image, long requestId) {
+        // Discard results from requests that have since been superseded by a newer one for
+        // the same image, otherwise a late stale result would overwrite the latest preview.
+        if(!mRequestTracker.isCurrent(buffer.timestamp, requestId))
+            return;
+
         for(int i = 0; i < mItems.size(); i++) {
             if(mItems.get(i).buffer.equals(buffer))
             {

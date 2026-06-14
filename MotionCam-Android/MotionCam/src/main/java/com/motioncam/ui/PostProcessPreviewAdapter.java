@@ -15,6 +15,7 @@ import com.motioncam.R;
 import com.motioncam.camera.AsyncNativeCameraOps;
 import com.motioncam.camera.NativeCameraBuffer;
 import com.motioncam.camera.PostProcessSettings;
+import com.motioncam.camera.PreviewRequestTracker;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -89,6 +90,7 @@ public class PostProcessPreviewAdapter extends
     private LayoutInflater mInflater;
     private AsyncNativeCameraOps mAsyncNativeCameraOps;
     private List<Item> mItems;
+    private final PreviewRequestTracker mRequestTracker = new PreviewRequestTracker();
 //    private Matrix mTransformMatrix;
 
     PostProcessPreviewAdapter(Context context, AsyncNativeCameraOps asyncNativeCameraOps, List<NativeCameraBuffer> buffers) {
@@ -139,7 +141,10 @@ public class PostProcessPreviewAdapter extends
         if(index >= mItems.size())
             return;
 
-        mAsyncNativeCameraOps.generatePreview(mItems.get(index).buffer, settings, previewSize, mItems.get(index).preview, this, true);
+        Item item = mItems.get(index);
+        long requestId = mRequestTracker.newRequest(item.buffer.timestamp);
+
+        mAsyncNativeCameraOps.generatePreview(item.buffer, settings, previewSize, item.preview, this, true, requestId);
     }
 
     @Override
@@ -153,7 +158,13 @@ public class PostProcessPreviewAdapter extends
     }
 
     @Override
-    public void onPreviewAvailable(NativeCameraBuffer buffer, Bitmap image) {
+    public void onPreviewAvailable(NativeCameraBuffer buffer, Bitmap image, long requestId) {
+        // Discard results from requests that have since been superseded by a newer one for
+        // the same image, otherwise a late stale result would overwrite the preview produced
+        // by the user's latest parameters.
+        if(!mRequestTracker.isCurrent(buffer.timestamp, requestId))
+            return;
+
         for(int i = 0; i < mItems.size(); i++) {
             if (mItems.get(i).buffer.equals(buffer))
             {
