@@ -495,6 +495,16 @@ public class PostProcessFragment extends Fragment implements
     }
 
     @Override
+    public void onProcessingFailed(File internalPath) {
+        // Export failed - hide the progress bar so the UI returns to idle. The RAW
+        // container is kept on disk so the capture can be retried.
+        View v = getView();
+        if(v != null) {
+            v.findViewById(R.id.saveProgressBar).setVisibility(View.INVISIBLE);
+        }
+    }
+
+    @Override
     public void onPreviewSaved(String outputPath) {
     }
 

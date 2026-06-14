@@ -135,9 +135,49 @@ public class ProcessorService extends IntentService {
                 bundle.putInt(ProcessorReceiver.PROCESS_CODE_PROGRESS_VALUE_KEY, 0);
                 bundle.putString(ProcessorReceiver.PROCESS_CODE_OUTPUT_FILE_PATH_KEY, mRawContainerPath.getPath());
 
-                mReceiver.send(ProcessorReceiver.PROCESS_CODE_STARTED, Bundle.EMPTY);
+                mReceiver.send(ProcessorReceiver.PROCESS_CODE_STARTED, bundle);
             }
 
+            Uri contentUri;
+
+            try {
+                contentUri = exportToGallery();
+            }
+            catch (IOException e) {
+                // The export failed part-way through. Report the failure and leave the
+                // RAW container on disk so the capture can be retried.
+                notifyFailed();
+                throw e;
+            }
+
+            boolean producedOutput = contentUri != null;
+
+            if(!ExportPolicy.shouldReportCompleted(producedOutput)) {
+                // Processing finished but nothing reached the gallery (e.g. no JPEG was
+                // generated). Treat it as a failure and keep the RAW container.
+                notifyFailed();
+                throw new IOException("Export produced no output for " + mRawContainerPath.getName());
+            }
+
+            if(mReceiver != null) {
+                Bundle bundle = new Bundle();
+
+                bundle.putString(ProcessorReceiver.PROCESS_CODE_CONTENT_URI_KEY, contentUri.toString());
+                bundle.putString(ProcessorReceiver.PROCESS_CODE_OUTPUT_FILE_PATH_KEY, mTempFileJpeg.getPath());
+                bundle.putInt(ProcessorReceiver.PROCESS_CODE_PROGRESS_VALUE_KEY, 100);
+
+                mReceiver.send(ProcessorReceiver.PROCESS_CODE_COMPLETED, bundle);
+            }
+
+            mNotifyManager.cancel(NOTIFICATION_ID);
+
+            if(ExportPolicy.shouldDeleteRawContainer(producedOutput, mProcessInMemory))
+                mRawContainerPath.delete();
+
+            return true;
+        }
+
+        private Uri exportToGallery() throws IOException {
             Uri contentUri = null;
 
             // Copy to media store
@@ -188,22 +228,18 @@ public class ProcessorService extends IntentService {
                 }
             }
 
+            return contentUri;
+        }
+
+        private void notifyFailed() {
             if(mReceiver != null) {
                 Bundle bundle = new Bundle();
-
-                bundle.putString(ProcessorReceiver.PROCESS_CODE_CONTENT_URI_KEY, contentUri.toString());
                 bundle.putString(ProcessorReceiver.PROCESS_CODE_OUTPUT_FILE_PATH_KEY, mTempFileJpeg.getPath());
-                bundle.putInt(ProcessorReceiver.PROCESS_CODE_PROGRESS_VALUE_KEY, 100);
 
-                mReceiver.send(ProcessorReceiver.PROCESS_CODE_COMPLETED, bundle);
+                mReceiver.send(ProcessorReceiver.PROCESS_CODE_FAILED, bundle);
             }
 
             mNotifyManager.cancel(NOTIFICATION_ID);
-
-            if(!mProcessInMemory)
-                mRawContainerPath.delete();
-
-            return true;
         }
 
         @RequiresApi(api = Build.VERSION_CODES.Q)
@@ -437,8 +473,9 @@ public class ProcessorService extends IntentService {
                 processFile.call();
             }
             catch (Exception e) {
+                // Keep the RAW container on disk so the capture can be retried; the
+                // service deletes it itself only after a successful export.
                 Log.e(TAG, "Failed to process " + file.getPath(), e);
-                file.delete();
             }
         }
     }

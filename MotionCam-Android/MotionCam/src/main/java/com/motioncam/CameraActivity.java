@@ -1753,6 +1753,13 @@ public class CameraActivity extends AppCompatActivity implements
     }
 
     @Override
+    public void onProcessingFailed(File internalPath) {
+        // Export failed - clear the processing overlay so the capture UI returns to idle.
+        // The RAW container is kept on disk so the capture can be retried.
+        mBinding.previewProcessingFrame.setVisibility(View.INVISIBLE);
+    }
+
+    @Override
     public boolean onKeyDown(int keyCode, KeyEvent event) {
         if(keyCode == KeyEvent.KEYCODE_VOLUME_DOWN) {
             onCaptureClicked();
