@@ -11,7 +11,7 @@ import java.io.File;
 import static com.motioncam.processor.ProcessorService.TAG;
 
 public class ProcessorReceiver extends ResultReceiver {
-    private Receiver mReceiver;
+    private final DeliveryBuffer<Receiver> mBuffer = new DeliveryBuffer<>();
 
     final static int PROCESS_CODE_STARTED       = 1000;
     final static int PROCESS_CODE_PROGRESS      = 1001;
@@ -35,40 +35,39 @@ public class ProcessorReceiver extends ResultReceiver {
     }
 
     public void setReceiver(Receiver receiver) {
-        mReceiver = receiver;
+        // Attaching a receiver replays any results that arrived while it was detached (e.g. while
+        // the Activity/Fragment was paused), so completion is never lost across page switches.
+        mBuffer.setConsumer(receiver);
     }
 
     @Override
     protected void onReceiveResult(int resultCode, Bundle resultData) {
-        if (mReceiver == null)
-            return;
-
         Log.d(TAG, "onReceiveResult(" + resultCode + ")");
 
         switch(resultCode)
         {
             case PROCESS_CODE_STARTED: {
-                mReceiver.onProcessingStarted();
+                mBuffer.post(Receiver::onProcessingStarted);
             }
             break;
 
             case PROCESS_CODE_PREVIEW_READY: {
                 String outputPath = resultData.getString(PROCESS_CODE_OUTPUT_FILE_PATH_KEY);
-                mReceiver.onPreviewSaved(outputPath);
+                mBuffer.post(receiver -> receiver.onPreviewSaved(outputPath));
             }
             break;
 
             case PROCESS_CODE_PROGRESS: {
                 int progress = resultData.getInt(PROCESS_CODE_PROGRESS_VALUE_KEY, 0);
-                mReceiver.onProcessingProgress(progress);
+                mBuffer.post(receiver -> receiver.onProcessingProgress(progress));
             }
             break;
 
             case PROCESS_CODE_COMPLETED: {
-                String outputPath = resultData.getString(PROCESS_CODE_OUTPUT_FILE_PATH_KEY);
-                String contentUri = resultData.getString(PROCESS_CODE_CONTENT_URI_KEY);
+                File internalPath = new File(resultData.getString(PROCESS_CODE_OUTPUT_FILE_PATH_KEY));
+                Uri contentUri = Uri.parse(resultData.getString(PROCESS_CODE_CONTENT_URI_KEY));
 
-                mReceiver.onProcessingCompleted(new File(outputPath), Uri.parse(contentUri));
+                mBuffer.post(receiver -> receiver.onProcessingCompleted(internalPath, contentUri));
             }
             break;
 
