@@ -887,7 +887,7 @@ public class CameraActivity extends AppCompatActivity implements
             hdrExposure = CameraManualControl.MapToExposureLine(1.0, hdrExposure, CameraManualControl.HDR_EXPOSURE_LINE);
 
             float a = 1.6f;
-            if(mCameraMetadata.cameraApertures.length > 0)
+            if(mCameraMetadata.cameraApertures != null && mCameraMetadata.cameraApertures.length > 0)
                 a = mCameraMetadata.cameraApertures[0];
 
             DenoiseSettings denoiseSettings = new DenoiseSettings(

@@ -233,6 +233,20 @@ public class PostProcessViewModel extends ViewModel {
         return mPostProcessSettings;
     }
 
+    // Default aperture (f-number) used when the camera does not report aperture
+    // metadata. Chosen as a sane value for typical phone lenses.
+    static final float DEFAULT_APERTURE = 1.6f;
+
+    // Resolve the aperture to use for EV estimation. Some devices return a null or
+    // empty aperture array, and a non-positive value would make getEv() produce a
+    // non-finite EV (log2 of zero). In all of those cases fall back to the default.
+    static float resolveAperture(float[] cameraApertures) {
+        if(cameraApertures != null && cameraApertures.length > 0 && cameraApertures[0] > 0.0f)
+            return cameraApertures[0];
+
+        return DEFAULT_APERTURE;
+    }
+
     private void update(float[] cameraApertures, long shutterSpeed, int iso, PostProcessSettings settings) {
         // Light
         shadows.setValue((int)Math.ceil(Math.log(settings.shadows)/Math.log(1.85f) / 6.0f * 100.0f));
@@ -264,9 +278,7 @@ public class PostProcessViewModel extends ViewModel {
                 CameraManualControl.GetClosestShutterSpeed(shutterSpeed),
                 CameraManualControl.GetClosestIso(CameraManualControl.GetIsoValuesInRange(100, 6400), iso));
 
-        float a = 1.6f;
-        if(cameraApertures == null || cameraApertures.length == 0)
-            a = cameraApertures[0];
+        float a = resolveAperture(cameraApertures);
 
         DenoiseSettings denoiseSettings = new DenoiseSettings(0, (float) exposure.getEv(a), settings.shadows);
         PostProcessViewModel.SpatialDenoiseAggressiveness spatialNoise = SpatialDenoiseAggressiveness.NORMAL;
