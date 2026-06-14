@@ -12,6 +12,7 @@ import static com.motioncam.processor.ProcessorService.TAG;
 
 public class ProcessorReceiver extends ResultReceiver {
     private Receiver mReceiver;
+    private final ResultEventBuffer mEventBuffer;
 
     final static int PROCESS_CODE_STARTED       = 1000;
     final static int PROCESS_CODE_PROGRESS      = 1001;
@@ -24,6 +25,7 @@ public class ProcessorReceiver extends ResultReceiver {
 
     public ProcessorReceiver(Handler handler) {
         super(handler);
+        mEventBuffer = new ResultEventBuffer();
     }
 
     public interface Receiver {
@@ -36,14 +38,42 @@ public class ProcessorReceiver extends ResultReceiver {
 
     public void setReceiver(Receiver receiver) {
         mReceiver = receiver;
+
+        // Delegate to the event buffer — it will replay any pending events
+        // through dispatchEvent() when a non-null receiver is attached.
+        mEventBuffer.setCallback(receiver != null ? this::dispatchEvent : null);
+    }
+
+    /**
+     * Returns the number of events currently buffered and awaiting delivery.
+     * Visible for testing.
+     */
+    int getPendingEventCount() {
+        return mEventBuffer.getPendingEventCount();
+    }
+
+    /**
+     * Discards all buffered events without delivering them.
+     * Visible for testing.
+     */
+    void clearPendingEvents() {
+        mEventBuffer.clearPendingEvents();
     }
 
     @Override
     protected void onReceiveResult(int resultCode, Bundle resultData) {
+        Log.d(TAG, "onReceiveResult(" + resultCode + ")");
+        mEventBuffer.onEvent(resultCode, resultData);
+    }
+
+    /**
+     * Dispatches a result event to the attached UI receiver.
+     * Called either directly from onReceiveResult (when a receiver is attached)
+     * or replayed from the event buffer when a receiver re-attaches.
+     */
+    private void dispatchEvent(int resultCode, Bundle resultData) {
         if (mReceiver == null)
             return;
-
-        Log.d(TAG, "onReceiveResult(" + resultCode + ")");
 
         switch(resultCode)
         {

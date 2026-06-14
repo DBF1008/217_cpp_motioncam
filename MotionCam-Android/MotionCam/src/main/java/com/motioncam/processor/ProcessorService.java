@@ -135,7 +135,7 @@ public class ProcessorService extends IntentService {
                 bundle.putInt(ProcessorReceiver.PROCESS_CODE_PROGRESS_VALUE_KEY, 0);
                 bundle.putString(ProcessorReceiver.PROCESS_CODE_OUTPUT_FILE_PATH_KEY, mRawContainerPath.getPath());
 
-                mReceiver.send(ProcessorReceiver.PROCESS_CODE_STARTED, Bundle.EMPTY);
+                mReceiver.send(ProcessorReceiver.PROCESS_CODE_STARTED, bundle);
             }
 
             Uri contentUri = null;
@@ -351,7 +351,9 @@ public class ProcessorService extends IntentService {
             Bundle bundle = new Bundle();
             bundle.putString(ProcessorReceiver.PROCESS_CODE_OUTPUT_FILE_PATH_KEY, outputPath);
 
-            mReceiver.send(ProcessorReceiver.PROCESS_CODE_PREVIEW_READY, bundle);
+            if(mReceiver != null) {
+                mReceiver.send(ProcessorReceiver.PROCESS_CODE_PREVIEW_READY, bundle);
+            }
 
             // Return metadata about the image
             Moshi moshi = new Moshi.Builder().build();
