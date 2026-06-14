@@ -455,9 +455,13 @@ jboolean JNICALL Java_com_motioncam_camera_NativeCameraSessionBridge_DisableRawP
         return JNI_FALSE;
     }
 
-    gRawPreviewListener = nullptr;
-
+    // Stop the preprocess thread FIRST so all in-flight onPreviewGenerated()
+    // callbacks complete while the JNI GlobalRefs inside gRawPreviewListener
+    // are still valid.  Only after the thread has joined is it safe to
+    // destroy the listener (which deletes those GlobalRefs in its dtor).
     sessionManager->disableRawPreview();
+
+    gRawPreviewListener = nullptr;
 
     return JNI_TRUE;
 }

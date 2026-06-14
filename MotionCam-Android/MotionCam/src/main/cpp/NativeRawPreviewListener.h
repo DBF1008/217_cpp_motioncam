@@ -3,6 +3,7 @@
 
 #include <jni.h>
 #include <android/bitmap.h>
+#include <shared_mutex>
 
 #include "camera/RawPreviewListener.h"
 
@@ -20,6 +21,12 @@ namespace motioncam {
         jobject mListenerInstance;
         jclass mListenerClass;
         jobject mBitmap;
+
+        // Guards against use-after-free: callbacks take a shared (read) lock
+        // so they can run concurrently; the destructor takes a unique (write)
+        // lock to wait for every in-flight callback to finish before deleting
+        // the JNI GlobalRefs.
+        mutable std::shared_mutex mCallbackMutex;
     };
 
 } // namespace motioncam

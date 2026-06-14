@@ -28,6 +28,11 @@ namespace motioncam {
     }
 
     NativeRawPreviewListener::~NativeRawPreviewListener() {
+        // Acquire the write lock: this blocks until every in-flight callback
+        // (which holds a shared/read lock) has returned, so no callback can
+        // touch the GlobalRefs after we start deleting them.
+        std::unique_lock<std::shared_mutex> lock(mCallbackMutex);
+
         JavaEnv env(mJavaVm);
         if (!env.getEnv()) {
             LOGE("~NativeRawPreviewListener() no environment");
@@ -42,14 +47,23 @@ namespace motioncam {
 
         if(mBitmap)
             env.getEnv()->DeleteGlobalRef(mBitmap);
+
+        mListenerClass = nullptr;
+        mListenerInstance = nullptr;
+        mBitmap = nullptr;
     }
 
     void NativeRawPreviewListener::onPreviewGenerated(const void* data, const int len, const int width, const int height) {
+        std::shared_lock<std::shared_mutex> lock(mCallbackMutex);
+
         JavaEnv env(mJavaVm);
         if (!env.getEnv()) {
             LOGE("Dropped onPreviewGenerated()");
             return;
         }
+
+        if(!mListenerClass || !mListenerInstance)
+            return;
 
         // Create bitmap if we don't have one
         if(!mBitmap) {
