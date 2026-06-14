@@ -112,8 +112,10 @@ public class NativeCameraSessionBridge implements NativeCameraSessionListener, N
 
     private final Moshi mJson = new Moshi.Builder().build();
     private long mNativeCameraHandle;
-    private CameraSessionListener mListener;
-    private CameraRawPreviewListener mRawPreviewListener;
+    // These listeners are cleared on the UI thread (destroy()/disableRawPreview()) but read from
+    // native callback threads, so they are volatile and every callback snapshots them before use.
+    private volatile CameraSessionListener mListener;
+    private volatile CameraRawPreviewListener mRawPreviewListener;
 
     public NativeCameraSessionBridge(long nativeHandle) {
         mNativeCameraHandle = nativeHandle;
@@ -147,7 +149,9 @@ public class NativeCameraSessionBridge implements NativeCameraSessionListener, N
         DestroyImageProcessor();
         Destroy(mNativeCameraHandle);
 
+        // Drop listeners so any late native callback that races with teardown is ignored.
         mListener = null;
+        mRawPreviewListener = null;
         mNativeCameraHandle = INVALID_NATIVE_HANDLE;
     }
 
@@ -331,6 +335,10 @@ public class NativeCameraSessionBridge implements NativeCameraSessionListener, N
         ensureValidHandle();
 
         DisableRawPreview(mNativeCameraHandle);
+
+        // Native side has dropped its RAW preview listener; mirror that here so any in-flight
+        // preview callback that arrives after this point is ignored instead of hitting a stale listener.
+        mRawPreviewListener = null;
     }
 
     public void updateOrientation(NativeCameraBuffer.ScreenOrientation orientation) {
@@ -353,54 +361,76 @@ public class NativeCameraSessionBridge implements NativeCameraSessionListener, N
 
     @Override
     public void onCameraDisconnected() {
-        mListener.onCameraDisconnected();
+        CameraSessionListener listener = mListener;
+        if(listener != null)
+            listener.onCameraDisconnected();
     }
 
     @Override
     public void onCameraError(int error) {
-        mListener.onCameraError(error);
+        CameraSessionListener listener = mListener;
+        if(listener != null)
+            listener.onCameraError(error);
     }
 
     @Override
     public void onCameraSessionStateChanged(int state) {
-        mListener.onCameraSessionStateChanged(CameraState.FromInt(state));
+        CameraSessionListener listener = mListener;
+        if(listener != null)
+            listener.onCameraSessionStateChanged(CameraState.FromInt(state));
     }
 
     @Override
     public void onCameraExposureStatus(int iso, long exposureTime) {
-        mListener.onCameraExposureStatus(iso, exposureTime);
+        CameraSessionListener listener = mListener;
+        if(listener != null)
+            listener.onCameraExposureStatus(iso, exposureTime);
     }
 
     @Override
     public void onCameraAutoFocusStateChanged(int state) {
-        mListener.onCameraAutoFocusStateChanged(CameraFocusState.FromInt(state));
+        CameraSessionListener listener = mListener;
+        if(listener != null)
+            listener.onCameraAutoFocusStateChanged(CameraFocusState.FromInt(state));
     }
 
     @Override
     public void onCameraAutoExposureStateChanged(int state) {
-        mListener.onCameraAutoExposureStateChanged(CameraExposureState.FromInt(state));
+        CameraSessionListener listener = mListener;
+        if(listener != null)
+            listener.onCameraAutoExposureStateChanged(CameraExposureState.FromInt(state));
     }
 
     @Override
     public void onCameraHdrImageCaptureFailed() {
-        mListener.onCameraHdrImageCaptureFailed();
+        CameraSessionListener listener = mListener;
+        if(listener != null)
+            listener.onCameraHdrImageCaptureFailed();
     }
 
     @Override
     public void onCameraHdrImageCaptureProgress(int image) {
-        mListener.onCameraHdrImageCaptureProgress(image);
+        CameraSessionListener listener = mListener;
+        if(listener != null)
+            listener.onCameraHdrImageCaptureProgress(image);
     }
 
     @Override
     public void onCameraHdrImageCaptureCompleted() {
-        mListener.onCameraHdrImageCaptureCompleted();
+        CameraSessionListener listener = mListener;
+        if(listener != null)
+            listener.onCameraHdrImageCaptureCompleted();
     }
 
     @Override
     public Bitmap onRawPreviewBitmapNeeded(int width, int height) {
+        CameraRawPreviewListener listener = mRawPreviewListener;
+        if(listener == null)
+            return null;
+
         Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
 
-        mRawPreviewListener.onRawPreviewCreated(bitmap);
+        listener.onRawPreviewCreated(bitmap);
 
         return bitmap;
     }
@@ -417,7 +447,9 @@ public class NativeCameraSessionBridge implements NativeCameraSessionListener, N
 
     @Override
     public void onRawPreviewUpdated() {
-        mRawPreviewListener.onRawPreviewUpdated();
+        CameraRawPreviewListener listener = mRawPreviewListener;
+        if(listener != null)
+            listener.onRawPreviewUpdated();
     }
 
     private native long Create(NativeCameraSessionListener listener, long maxMemoryUsageBytes, String nativeLibPath);

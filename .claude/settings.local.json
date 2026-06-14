@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(echo \"$ANDROID_HOME:-unset / $ANDROID_SDK_ROOT:-unset\")",
+      "Bash(java -version)"
+    ]
+  }
+}
